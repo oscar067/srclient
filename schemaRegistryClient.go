@@ -58,12 +58,14 @@ type SchemaRegistryClient struct {
 	cachingEnabled           bool
 	cachingEnabledLock       sync.RWMutex
 	codecCreationEnabled     bool
+	idSchemaCache            sync.Map
 	codecCreationEnabledLock sync.RWMutex
-	idSchemaCache            map[int]*Schema
-	idSchemaCacheLock        sync.RWMutex
-	subjectSchemaCache       map[string]*Schema
-	subjectSchemaCacheLock   sync.RWMutex
-	sem                      *semaphore.Weighted
+	//idSchemaCache            map[int]*Schema
+	//idSchemaCacheLock        sync.RWMutex
+	subjectSchemaCach  sync.Map
+	subjectSchemaCache sync.Map
+	//subjectSchemaCacheLock sync.RWMutex
+	sem *semaphore.Weighted
 }
 
 var _ ISchemaRegistryClient = new(SchemaRegistryClient)
@@ -183,8 +185,8 @@ func CreateSchemaRegistryClientWithOptions(schemaRegistryURL string, client *htt
 		httpClient:           client,
 		cachingEnabled:       true,
 		codecCreationEnabled: false,
-		idSchemaCache:        make(map[int]*Schema),
-		subjectSchemaCache:   make(map[string]*Schema),
+		idSchemaCache:        sync.Map{},
+		subjectSchemaCache:   sync.Map{},
 		sem:                  semaphore.NewWeighted(int64(semaphoreWeight)),
 	}
 }
@@ -192,12 +194,12 @@ func CreateSchemaRegistryClientWithOptions(schemaRegistryURL string, client *htt
 // ResetCache resets the schema caches to be able to get updated schemas.
 func (client *SchemaRegistryClient) ResetCache() {
 
-	client.idSchemaCacheLock.Lock()
-	client.subjectSchemaCacheLock.Lock()
-	client.idSchemaCache = make(map[int]*Schema)
-	client.subjectSchemaCache = make(map[string]*Schema)
-	client.idSchemaCacheLock.Unlock()
-	client.subjectSchemaCacheLock.Unlock()
+	//client.idSchemaCacheLock.Lock()
+	//client.subjectSchemaCacheLock.Lock()
+	client.idSchemaCache = sync.Map{}
+	client.subjectSchemaCache = sync.Map{}
+	//client.idSchemaCacheLock.Unlock()
+	//client.subjectSchemaCacheLock.Unlock()
 
 }
 
@@ -205,11 +207,10 @@ func (client *SchemaRegistryClient) ResetCache() {
 func (client *SchemaRegistryClient) GetSchema(schemaID int) (*Schema, error) {
 
 	if client.getCachingEnabled() {
-		client.idSchemaCacheLock.RLock()
-		cachedSchema := client.idSchemaCache[schemaID]
-		client.idSchemaCacheLock.RUnlock()
-		if cachedSchema != nil {
-			return cachedSchema, nil
+		//client.idSchemaCacheLock.RLock()
+		cachedSchema, loaded := client.idSchemaCache.Load(schemaID)
+		if loaded {
+			return cachedSchema.(*Schema), nil
 		}
 	}
 
@@ -239,9 +240,9 @@ func (client *SchemaRegistryClient) GetSchema(schemaID int) (*Schema, error) {
 	}
 
 	if client.getCachingEnabled() {
-		client.idSchemaCacheLock.Lock()
-		client.idSchemaCache[schemaID] = schema
-		client.idSchemaCacheLock.Unlock()
+		//client.idSchemaCacheLock.Lock()
+		client.idSchemaCache.Store(schemaID, schema)
+		//client.idSchemaCacheLock.Unlock()
 	}
 
 	return schema, nil
@@ -405,14 +406,14 @@ func (client *SchemaRegistryClient) CreateSchema(subject string, schema string,
 		// Update the subject-2-schema cache
 		cacheKey := cacheKey(subject,
 			strconv.Itoa(newSchema.version))
-		client.subjectSchemaCacheLock.Lock()
-		client.subjectSchemaCache[cacheKey] = newSchema
-		client.subjectSchemaCacheLock.Unlock()
+		//client.subjectSchemaCacheLock.Lock()
+		client.subjectSchemaCache.Store(cacheKey, newSchema)
+		//client.subjectSchemaCacheLock.Unlock()
 
 		// Update the id-2-schema cache
-		client.idSchemaCacheLock.Lock()
-		client.idSchemaCache[newSchema.id] = newSchema
-		client.idSchemaCacheLock.Unlock()
+		//client.idSchemaCacheLock.Lock()
+		client.idSchemaCache.Store(newSchema.id, newSchema)
+		//client.idSchemaCacheLock.Unlock()
 
 	}
 
@@ -473,14 +474,14 @@ func (client *SchemaRegistryClient) LookupSchema(subject string, schema string, 
 		// Update the subject-2-schema cache
 		cacheKey := cacheKey(subject,
 			strconv.Itoa(gotSchema.version))
-		client.subjectSchemaCacheLock.Lock()
-		client.subjectSchemaCache[cacheKey] = gotSchema
-		client.subjectSchemaCacheLock.Unlock()
+		//client.subjectSchemaCacheLock.Lock()
+		client.subjectSchemaCache.Store(cacheKey, gotSchema)
+		//client.subjectSchemaCacheLock.Unlock()
 
 		// Update the id-2-schema cache
-		client.idSchemaCacheLock.Lock()
-		client.idSchemaCache[gotSchema.id] = gotSchema
-		client.idSchemaCacheLock.Unlock()
+		//client.idSchemaCacheLock.Lock()
+		client.idSchemaCache.Store(gotSchema.id, gotSchema)
+		//client.idSchemaCacheLock.Unlock()
 
 	}
 
@@ -550,7 +551,7 @@ func (client *SchemaRegistryClient) SetCredentials(username string, password str
 
 // SetBearerToken allows users to add a Bearer Token
 // http header with calls to Schema Registry
-// The BearerToken will override Schema Registry credentials 
+// The BearerToken will override Schema Registry credentials
 func (client *SchemaRegistryClient) SetBearerToken(token string) {
 	if len(token) > 0 {
 		credentials := credentials{username: "", password: "", bearerToken: token}
@@ -569,8 +570,8 @@ func (client *SchemaRegistryClient) SetTimeout(timeout time.Duration) {
 // that have been returned, which may speed up performance
 // if these values rarely changes.
 func (client *SchemaRegistryClient) CachingEnabled(value bool) {
-	client.cachingEnabledLock.Lock()
-	defer client.cachingEnabledLock.Unlock()
+	//client.cachingEnabledLock.Lock()
+	//defer client.cachingEnabledLock.Unlock()
 	client.cachingEnabled = value
 }
 
@@ -586,11 +587,11 @@ func (client *SchemaRegistryClient) getVersion(subject string, version string) (
 
 	if client.getCachingEnabled() {
 		cacheKey := cacheKey(subject, version)
-		client.subjectSchemaCacheLock.RLock()
-		cachedResult := client.subjectSchemaCache[cacheKey]
-		client.subjectSchemaCacheLock.RUnlock()
-		if cachedResult != nil {
-			return cachedResult, nil
+		//client.subjectSchemaCacheLock.RLock()
+		cachedResult, loaded := client.subjectSchemaCache.Load(cacheKey)
+		//client.subjectSchemaCacheLock.RUnlock()
+		if loaded {
+			return cachedResult.(*Schema), nil
 		}
 	}
 
@@ -624,14 +625,15 @@ func (client *SchemaRegistryClient) getVersion(subject string, version string) (
 
 		// Update the subject-2-schema cache
 		cacheKey := cacheKey(subject, version)
-		client.subjectSchemaCacheLock.Lock()
-		client.subjectSchemaCache[cacheKey] = schema
-		client.subjectSchemaCacheLock.Unlock()
+		//client.subjectSchemaCacheLock.Lock()
+		//client.subjectSchemaCache[cacheKey] = schema
+		client.subjectSchemaCache.LoadOrStore(cacheKey, schema)
+		//client.subjectSchemaCacheLock.Unlock()
 
 		// Update the id-2-schema cache
-		client.idSchemaCacheLock.Lock()
-		client.idSchemaCache[schema.id] = schema
-		client.idSchemaCacheLock.Unlock()
+		//client.idSchemaCacheLock.Lock()
+		client.idSchemaCache.LoadOrStore(schema.id, schema)
+		//client.idSchemaCacheLock.Unlock()
 
 	}
 
